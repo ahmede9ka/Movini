@@ -1,33 +1,61 @@
 import 'package:flutter/material.dart';
+import '../../services/movie_services.dart';
 import '../../widgets/movie_card.dart';
 
-class MoviesScreen extends StatelessWidget {
+class MoviesScreen extends StatefulWidget {
+  const MoviesScreen({super.key});
+
+  @override
+  State<MoviesScreen> createState() => _MoviesScreenState();
+}
+
+class _MoviesScreenState extends State<MoviesScreen> {
+  final MovieService movieService = MovieService();
+  List movies = [];
+  bool isLoading = false;
+
+  void search(String query) async {
+    setState(() => isLoading = true);
+    final results = await movieService.searchMovies(query);
+    setState(() {
+      movies = results;
+      isLoading = false;
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    search("Avengers"); // default search
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Temporary list until we integrate API
-    final movies = [
-      {"title": "Interstellar", "poster": "https://picsum.photos/200/300"},
-      {"title": "Inception", "poster": "https://picsum.photos/201/300"},
-      {"title": "Tenet", "poster": "https://picsum.photos/202/300"},
-    ];
-
     return Scaffold(
-      appBar: AppBar(title: Text("Movies")),
-      body: GridView.builder(
-        padding: EdgeInsets.all(10),
-        itemCount: movies.length,
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 0.65,
+      appBar: AppBar(title: const Text("Movies")),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : GridView.builder(
+        padding: const EdgeInsets.all(8),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2, // 2 cards per row
+          childAspectRatio: 0.65, // adjust for poster + title + button
+          crossAxisSpacing: 8,
+          mainAxisSpacing: 8,
         ),
+        itemCount: movies.length,
         itemBuilder: (context, index) {
+          final movie = movies[index];
           return MovieCard(
-            title: movies[index]["title"]!,
-            posterUrl: movies[index]["poster"]!,
+            title: movie['Title'],
+            posterUrl: movie['Poster'] != 'N/A'
+                ? movie['Poster']
+                : 'https://via.placeholder.com/200x300.png?text=No+Image',
             onFavorite: () {
-              // later Firebase
+              // handle favorite logic
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('${movie['Title']} added to favorites')),
+              );
             },
           );
         },
