@@ -1,52 +1,55 @@
 import 'package:flutter/material.dart';
-import 'movies_screen.dart';
-import 'favorites_screen.dart';
-import 'matching_screen.dart';
-import '../profile/profile_screen.dart';
+import 'package:movini/screens/home/movies_screen.dart';
+import 'package:movini/screens/favorites/favorites_screen.dart';
+import 'package:movini/screens//profile/profile_screen.dart';
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class MainNavigation extends StatefulWidget {
+  const MainNavigation({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<MainNavigation> createState() => _MainNavigationState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  int index = 0;
+class _MainNavigationState extends State<MainNavigation> {
+  int _currentIndex = 0;
 
   // Shared favorites across all screens
-  final Set<String> favoriteMovies = {};
-  final Set<String> favoriteMovies2 = {};
+  final Set<String> _favoriteMovies = {};
+
+  late final List<Widget> _screens;
+
+  @override
+  void initState() {
+    super.initState();
+    _screens = [
+      MoviesScreen(
+        favoriteMovies: _favoriteMovies,
+        onFavoriteToggle: _toggleFavorite,
+      ),
+      FavoritesScreen(
+        favoriteMovies: _favoriteMovies,
+        onFavoriteToggle: _toggleFavorite,
+      ),
+      const ProfileScreen(),
+    ];
+  }
 
   void _toggleFavorite(String movieId) {
     setState(() {
-      if (favoriteMovies.contains(movieId)) {
-        favoriteMovies.remove(movieId);
+      if (_favoriteMovies.contains(movieId)) {
+        _favoriteMovies.remove(movieId);
       } else {
-        favoriteMovies.add(movieId);
+        _favoriteMovies.add(movieId);
       }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final screens = [
-      MoviesScreen(
-        favoriteMovies: favoriteMovies,
-        onFavoriteToggle: _toggleFavorite,
-      ),
-      FavoritesScreen(
-        favoriteMovies: favoriteMovies2,
-        onFavoriteToggle: _toggleFavorite,
-      ),
-      MatchingScreen(),
-      const ProfileScreen(),
-    ];
-
     return Scaffold(
       body: IndexedStack(
-        index: index,
-        children: screens,
+        index: _currentIndex,
+        children: _screens,
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
@@ -59,8 +62,12 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         child: BottomNavigationBar(
-          currentIndex: index,
-          onTap: (i) => setState(() => index = i),
+          currentIndex: _currentIndex,
+          onTap: (index) {
+            setState(() {
+              _currentIndex = index;
+            });
+          },
           type: BottomNavigationBarType.fixed,
           backgroundColor: Colors.white,
           selectedItemColor: Theme.of(context).primaryColor,
@@ -72,22 +79,17 @@ class _HomeScreenState extends State<HomeScreen> {
             BottomNavigationBarItem(
               icon: _buildNavIcon(Icons.movie_outlined, 0),
               activeIcon: _buildNavIcon(Icons.movie, 0),
-              label: "Movies",
+              label: 'Movies',
             ),
             BottomNavigationBarItem(
               icon: _buildNavIcon(Icons.favorite_border, 1),
               activeIcon: _buildNavIcon(Icons.favorite, 1),
-              label: "Favorites",
+              label: 'Favorites',
             ),
             BottomNavigationBarItem(
-              icon: _buildNavIcon(Icons.people_outline, 2),
-              activeIcon: _buildNavIcon(Icons.people, 2),
-              label: "Matching",
-            ),
-            BottomNavigationBarItem(
-              icon: _buildNavIcon(Icons.person_outline, 3),
-              activeIcon: _buildNavIcon(Icons.person, 3),
-              label: "Profile",
+              icon: _buildNavIcon(Icons.person_outline, 2),
+              activeIcon: _buildNavIcon(Icons.person, 2),
+              label: 'Profile',
             ),
           ],
         ),
@@ -95,8 +97,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildNavIcon(IconData icon, int itemIndex) {
-    final isSelected = index == itemIndex;
+  Widget _buildNavIcon(IconData icon, int index) {
+    final isSelected = _currentIndex == index;
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(

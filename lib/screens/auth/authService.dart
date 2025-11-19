@@ -1,18 +1,109 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'dart:io';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
+  final GoogleSignIn _googleSignIn = GoogleSignIn();
 
   // Get current user
   User? get currentUser => _auth.currentUser;
 
   // Stream of auth changes
   Stream<User?> get authStateChanges => _auth.authStateChanges();
+
+  // Sign In with Google
+  Future<Map<String, dynamic>> signInWithGoogle() async {
+    try {
+      // Trigger the authentication flow
+      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+
+      if (googleUser == null) {
+        // User cancelled the sign-in
+        return {
+          'success': false,
+          'message': 'Sign in cancelled',
+        };
+      }
+
+      // Obtain the auth details from the request
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+
+      // Create a new credential
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      // Sign in to Firebase with the Google credential
+      final UserCredential userCredential =
+      await _auth.signInWithCredential(credential);
+
+      final userId = userCredential.user!.uid;
+
+      // Check if user document exists
+      final userDoc = await _firestore.collection('users').doc(userId).get();
+
+      if (!userDoc.exists) {
+        // First time sign in - create user document
+        final names = (userCredential.user!.displayName ?? '').split(' ');
+        final firstName = names.isNotEmpty ? names.first : '';
+        final lastName = names.length > 1 ? names.sublist(1).join(' ') : '';
+
+        await _firestore.collection('users').doc(userId).set({
+          'prenom': firstName,
+          'nom': lastName,
+          'age': 0, // User should update this
+          'email': userCredential.user!.email ?? '',
+          'photoURL': userCredential.user!.photoURL ?? '',
+          'role': 'user',
+          'isActive': true,
+          'authProvider': 'google',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+
+        return {
+          'success': true,
+          'message': 'Account created successfully',
+          'user': userCredential.user,
+          'isNewUser': true,
+          'role': 'user',
+        };
+      } else {
+        // Existing user - check if active
+        final userData = userDoc.data()!;
+        if (userData['isActive'] == false) {
+          await signOut();
+          return {
+            'success': false,
+            'message': 'Your account has been deactivated. Please contact support.',
+          };
+        }
+
+        return {
+          'success': true,
+          'message': 'Login successful',
+          'user': userCredential.user,
+          'isNewUser': false,
+          'role': userData['role'],
+        };
+      }
+    } on FirebaseAuthException catch (e) {
+      return {
+        'success': false,
+        'message': _getAuthErrorMessage(e.code),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'An error occurred: $e',
+      };
+    }
+  }
 
   // Sign Up with email, password and user data
   Future<Map<String, dynamic>> signUp({
@@ -48,6 +139,7 @@ class AuthService {
         'photoURL': photoURL ?? '',
         'role': 'user',
         'isActive': true,
+        'authProvider': 'email',
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -132,6 +224,7 @@ class AuthService {
 
   // Sign Out
   Future<void> signOut() async {
+    await _googleSignIn.signOut();
     await _auth.signOut();
   }
 
@@ -220,6 +313,8 @@ class AuthService {
         return 'Too many attempts. Please try again later';
       case 'operation-not-allowed':
         return 'This operation is not allowed';
+      case 'account-exists-with-different-credential':
+        return 'An account already exists with a different sign-in method';
       default:
         return 'An error occurred. Please try again';
     }
@@ -257,6 +352,9 @@ class AuthService {
       } catch (e) {
         print('Error deleting photo: $e');
       }
+
+      // Sign out from Google if needed
+      await _googleSignIn.signOut();
 
       // Delete auth user
       await currentUser!.delete();

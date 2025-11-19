@@ -77,6 +77,48 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _signInWithGoogle() async {
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final result = await _authService.signInWithGoogle();
+
+      if (!mounted) return;
+
+      if (result['success']) {
+        _showSnackBar(result['message']);
+
+        // Check user role and navigate accordingly
+        String role = result['role'] ?? 'user';
+
+        if (role == 'admin') {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const AdminHome()),
+          );
+        } else {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => HomeScreen()),
+          );
+        }
+      } else {
+        _showSnackBar(result['message'], isError: true);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showSnackBar('An unexpected error occurred', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
   Future<void> _forgotPassword() async {
     if (emailController.text.trim().isEmpty) {
       _showSnackBar('Please enter your email address', isError: true);
@@ -277,6 +319,36 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 24),
 
+                  // Google Sign In Button
+                  SizedBox(
+                    height: 50,
+                    child: OutlinedButton.icon(
+                      onPressed: isLoading ? null : _signInWithGoogle,
+                      icon: Image.asset(
+                        'assets/google_logo.png', // Add Google logo to assets
+                        height: 24,
+                        width: 24,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Icon(Icons.login, color: Colors.red);
+                        },
+                      ),
+                      label: const Text(
+                        'Continue with Google',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        side: BorderSide(color: Colors.grey[300]!),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
                   // Sign Up Link
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -292,7 +364,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) => SignupScreen(),
+                              builder: (_) => const SignupScreen(),
                             ),
                           );
                         },
