@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "150227549504",
+    "project_id": "movini-dc6c4",
+    "storage_bucket": "movini-dc6c4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:150227549504:android:34c61fece44dc06b5b4ea5",
+        "android_client_info": {
+          "package_name": "com.example.movini"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCkXOBx5lsb45lGbE24T5LxmVWy3JL9x_I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
