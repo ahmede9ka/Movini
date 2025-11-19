@@ -52,3 +52,4 @@ app.*.map.json
 *.iml
 *.log
 *.lock
+firebase.json
