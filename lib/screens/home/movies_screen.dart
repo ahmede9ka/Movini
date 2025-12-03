@@ -1,17 +1,12 @@
 import 'package:flutter/material.dart';
 import '../../services/movie_services.dart';
+import '../../services/auth_service.dart';
 import '../../widgets/movie_card.dart';
+import '../auth/authService.dart';
 import '../details/movie_details_screen.dart';
 
 class MoviesScreen extends StatefulWidget {
-  final Set<String> favoriteMovies;
-  final Function(String) onFavoriteToggle;
-
-  const MoviesScreen({
-    super.key,
-    required this.favoriteMovies,
-    required this.onFavoriteToggle,
-  });
+  const MoviesScreen({super.key});
 
   @override
   State<MoviesScreen> createState() => _MoviesScreenState();
@@ -19,13 +14,16 @@ class MoviesScreen extends StatefulWidget {
 
 class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMixin {
   final MovieService movieService = MovieService();
+  final AuthService authService = AuthService();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
 
-  List movies = [];
+  List<Map<String, dynamic>> movies = [];
   bool isLoading = false;
   bool isSearching = false;
   String currentQuery = "Avengers";
+  Set<String> favoriteMovies = {};
+  int favoritesCount = 0;
 
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
@@ -44,6 +42,7 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
     );
 
     search(currentQuery);
+    _loadFavorites();
   }
 
   @override
@@ -52,6 +51,58 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
     _searchFocusNode.dispose();
     _fadeController.dispose();
     super.dispose();
+  }
+
+  void _loadFavorites() async {
+    try {
+      final count = await authService.getFavoritesCount();
+      final favorites = await authService.getUserFavorites();
+      setState(() {
+        favoritesCount = count;
+        favoriteMovies = Set.from(favorites.map((fav) => fav['movieId']?.toString() ?? ''));
+      });
+    } catch (e) {
+      print('Error loading favorites: $e');
+    }
+  }
+
+  Future<void> toggleFavorite(String movieId, Map<String, dynamic> movie) async {
+    try {
+      final isCurrentlyFavorite = await authService.isFavorite(movieId);
+
+      if (isCurrentlyFavorite) {
+        final result = await authService.removeFromFavorites(movieId);
+        if (result['success'] == true) {
+          setState(() {
+            favoritesCount--;
+            favoriteMovies.remove(movieId);
+          });
+          _showSnackBar('Removed from favorites', Icons.favorite_border);
+        }
+      } else {
+        final result = await authService.addToFavorites(
+          movieId: movieId,
+          movieTitle: movie['Title']?.toString() ?? 'Unknown',
+          year: movie['Year']?.toString() ?? '',
+          posterUrl: (movie['Poster'] != null &&
+              movie['Poster'] != 'N/A' &&
+              movie['Poster'].toString().isNotEmpty)
+              ? movie['Poster'].toString()
+              : 'https://via.placeholder.com/300x450.png?text=No+Image',
+          rating: movie['imdbRating']?.toString() ?? '0.0',
+        );
+        if (result['success'] == true) {
+          setState(() {
+            favoritesCount++;
+            favoriteMovies.add(movieId);
+          });
+          _showSnackBar('Added to favorites', Icons.favorite);
+        }
+      }
+    } catch (e) {
+      _showSnackBar('Error updating favorites', Icons.error);
+      print('Error toggling favorite: $e');
+    }
   }
 
   void search(String query) async {
@@ -66,12 +117,13 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
 
     final results = await movieService.searchMovies(query);
 
-    setState(() {
-      movies = results;
-      isLoading = false;
-    });
-
-    _fadeController.forward();
+    if (mounted) {
+      setState(() {
+        movies = results;
+        isLoading = false;
+      });
+      _fadeController.forward();
+    }
   }
 
   void _showSnackBar(String message, IconData icon) {
@@ -93,19 +145,32 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
     );
   }
 
-  void _navigateToDetails(Map movie) {
-    final movieId = movie['imdbID'] ?? movie['Title'];
+  void _navigateToDetails(Map<String, dynamic> movie) {
+    final movieId = movie['imdbID']?.toString() ?? movie['Title']?.toString() ?? '';
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => MovieDetailsScreen(
           movieId: movieId,
-          title: movie['Title'] ?? 'Unknown',
-          posterUrl: movie['Poster'] != 'N/A' && movie['Poster'] != null
-              ? movie['Poster']
+          title: movie['Title']?.toString() ?? 'Unknown',
+          posterUrl: (movie['Poster'] != null &&
+              movie['Poster'] != 'N/A' &&
+              movie['Poster'].toString().isNotEmpty)
+              ? movie['Poster'].toString()
               : 'https://via.placeholder.com/300x450.png?text=No+Image',
-          isFavorite: widget.favoriteMovies.contains(movieId),
-          onToggleFavorite: widget.onFavoriteToggle,
+          year: movie['Year']?.toString() ?? '',
+          rating: movie['imdbRating']?.toString() ?? '0.0',
+          isFavorite: favoriteMovies.contains(movieId),
+          onToggleFavorite: (movieId) async {
+            // Find the movie in the current list
+            final movieToToggle = movies.firstWhere(
+                  (m) => (m['imdbID']?.toString() ?? m['Title']?.toString()) == movieId,
+              orElse: () => {},
+            );
+            if (movieToToggle.isNotEmpty) {
+              await toggleFavorite(movieId, movieToToggle);
+            }
+          },
         ),
       ),
     );
@@ -118,23 +183,31 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
       body: CustomScrollView(
         slivers: [
           _buildSliverAppBar(),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildResultsHeader(),
-                  const SizedBox(height: 16),
-                ],
+
+          // Results header - Only show when not loading and has results
+          if (!isLoading && movies.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: _buildResultsHeader(),
               ),
             ),
-          ),
-          isLoading
-              ? SliverFillRemaining(child: _buildLoadingState())
-              : movies.isEmpty
-              ? SliverFillRemaining(child: _buildEmptyState())
-              : _buildMoviesGrid(),
+
+          // Loading state
+          if (isLoading)
+            SliverFillRemaining(
+              child: _buildLoadingState(),
+            )
+
+          // Empty state
+          else if (movies.isEmpty)
+            SliverFillRemaining(
+              child: _buildEmptyState(),
+            )
+
+          // Movies grid
+          else
+            _buildMoviesGrid(),
         ],
       ),
     );
@@ -142,19 +215,27 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
 
   Widget _buildSliverAppBar() {
     return SliverAppBar(
-      expandedHeight: 120,
-      floating: true,
+      expandedHeight: 160,
+      floating: false,
       pinned: true,
+      snap: false,
+      stretch: true,
       backgroundColor: Theme.of(context).primaryColor,
       flexibleSpace: FlexibleSpaceBar(
-        title: !isSearching
-            ? const Text(
-          'Movies',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 24),
-        )
-            : null,
-        centerTitle: false,
         titlePadding: const EdgeInsets.only(left: 16, bottom: 16),
+        centerTitle: false,
+        title: AnimatedOpacity(
+          duration: const Duration(milliseconds: 200),
+          opacity: isSearching ? 0.0 : 1.0,
+          child: const Text(
+            'Movies',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 24,
+              color: Colors.white,
+            ),
+          ),
+        ),
         background: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -163,13 +244,14 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
               colors: [
                 Theme.of(context).primaryColor,
                 Theme.of(context).primaryColor.withOpacity(0.8),
+                Theme.of(context).primaryColor.withOpacity(0.6),
               ],
             ),
           ),
         ),
       ),
       bottom: PreferredSize(
-        preferredSize: const Size.fromHeight(60),
+        preferredSize: const Size.fromHeight(70),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           child: _buildSearchBar(),
@@ -179,100 +261,148 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
   }
 
   Widget _buildSearchBar() {
-    return Hero(
-      tag: 'search_bar',
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(30),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: TextField(
-            controller: _searchController,
-            focusNode: _searchFocusNode,
-            decoration: InputDecoration(
-              hintText: 'Search movies...',
-              hintStyle: TextStyle(color: Colors.grey[400]),
-              prefixIcon: Icon(Icons.search, color: Colors.grey[600]),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
-                icon: Icon(Icons.clear, color: Colors.grey[600]),
-                onPressed: () {
-                  _searchController.clear();
-                  search("Avengers");
-                },
-              )
-                  : null,
-              border: InputBorder.none,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(30),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(30),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
-            onSubmitted: (value) {
-              if (value.trim().isNotEmpty) {
-                search(value);
-                _searchFocusNode.unfocus();
-              }
-            },
-            onChanged: (value) {
-              setState(() {});
-            },
+          ],
+        ),
+        child: TextField(
+          controller: _searchController,
+          focusNode: _searchFocusNode,
+          decoration: InputDecoration(
+            hintText: 'Search movies...',
+            hintStyle: TextStyle(
+              color: Colors.grey[400],
+              fontSize: 16,
+            ),
+            prefixIcon: Icon(
+              Icons.search,
+              color: Colors.grey[600],
+              size: 24,
+            ),
+            suffixIcon: _searchController.text.isNotEmpty
+                ? IconButton(
+              icon: Icon(
+                Icons.clear,
+                color: Colors.grey[600],
+                size: 24,
+              ),
+              onPressed: () {
+                _searchController.clear();
+                search("Avengers");
+              },
+            )
+                : null,
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            filled: true,
+            fillColor: Colors.white,
           ),
+          style: const TextStyle(
+            fontSize: 16,
+            color: Colors.black87,
+          ),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              search(value);
+              _searchFocusNode.unfocus();
+            }
+          },
+          onChanged: (value) {
+            setState(() {
+              isSearching = value.isNotEmpty;
+            });
+          },
+          onTap: () {
+            setState(() {
+              isSearching = _searchController.text.isNotEmpty;
+            });
+          },
         ),
       ),
     );
   }
 
   Widget _buildResultsHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Results for "$currentQuery"',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Results for "$currentQuery"',
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${movies.length} movies found',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: Theme.of(context).primaryColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: Theme.of(context).primaryColor.withOpacity(0.2),
+                  width: 1,
                 ),
-                overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 4),
-              Text(
-                '${movies.length} movies found',
-                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.favorite,
+                    size: 18,
+                    color: Theme.of(context).primaryColor,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '$favoritesCount',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).primaryColor,
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Theme.of(context).primaryColor.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.favorite, size: 16, color: Theme.of(context).primaryColor),
-              const SizedBox(width: 6),
-              Text(
-                '${widget.favoriteMovies.length}',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).primaryColor,
-                ),
-              ),
-            ],
-          ),
+        const SizedBox(height: 16),
+        const Divider(
+          height: 1,
+          color: Colors.grey,
         ),
       ],
     );
@@ -285,12 +415,18 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
         children: [
           CircularProgressIndicator(
             strokeWidth: 3,
-            valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).primaryColor),
+            valueColor: AlwaysStoppedAnimation<Color>(
+              Theme.of(context).primaryColor,
+            ),
           ),
           const SizedBox(height: 24),
           Text(
             'Loading movies...',
-            style: TextStyle(fontSize: 16, color: Colors.grey[600], fontWeight: FontWeight.w500),
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ],
       ),
@@ -298,15 +434,37 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
   }
 
   Widget _buildEmptyState() {
-    return Center(
+    return Padding(
+      padding: const EdgeInsets.all(32),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(Icons.movie_outlined, size: 100, color: Colors.grey[400]),
-          const SizedBox(height: 24),
-          Text('No movies found', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.grey[700])),
+          Icon(
+            Icons.movie_outlined,
+            size: 100,
+            color: Colors.grey[300],
+          ),
+          const SizedBox(height: 32),
+          Text(
+            'No movies found',
+            style: TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[700],
+            ),
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 12),
-          Text('Try searching for something else', style: TextStyle(fontSize: 16, color: Colors.grey[500])),
+          Text(
+            'Try searching for something else',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.grey[500],
+              height: 1.5,
+            ),
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 32),
           ElevatedButton.icon(
             onPressed: () {
@@ -314,10 +472,33 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
               search('Avengers');
             },
             icon: const Icon(Icons.refresh),
-            label: const Text('Reset Search'),
+            label: const Text('Try "Avengers" Again'),
             style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(30),
+              ),
+              elevation: 2,
+            ),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: () {
+              _searchController.clear();
+              _searchFocusNode.requestFocus();
+            },
+            icon: const Icon(Icons.search),
+            label: const Text('Search for another movie'),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(30),
+              ),
+              side: BorderSide(
+                color: Theme.of(context).primaryColor,
+              ),
             ),
           ),
         ],
@@ -327,7 +508,7 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
 
   Widget _buildMoviesGrid() {
     return SliverPadding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       sliver: SliverGrid(
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
@@ -338,25 +519,21 @@ class _MoviesScreenState extends State<MoviesScreen> with TickerProviderStateMix
         delegate: SliverChildBuilderDelegate(
               (context, index) {
             final movie = movies[index];
-            final movieId = movie['imdbID'] ?? movie['Title'];
+            final movieId = movie['imdbID']?.toString() ?? movie['Title']?.toString() ?? '';
 
             return FadeTransition(
               opacity: _fadeAnimation,
               child: MovieCard(
-                title: movie['Title'] ?? 'Unknown',
-                posterUrl: movie['Poster'] != 'N/A' && movie['Poster'] != null
-                    ? movie['Poster']
+                title: movie['Title']?.toString() ?? 'Unknown',
+                posterUrl: (movie['Poster'] != null &&
+                    movie['Poster'] != 'N/A' &&
+                    movie['Poster'].toString().isNotEmpty)
+                    ? movie['Poster'].toString()
                     : 'https://via.placeholder.com/300x450.png?text=No+Image',
-                year: movie['Year'],
-                rating: movie['imdbRating'],
-                isFavorite: widget.favoriteMovies.contains(movieId),
-                onFavorite: () {
-                  widget.onFavoriteToggle(movieId);
-                  _showSnackBar(
-                    widget.favoriteMovies.contains(movieId) ? 'Added to favorites' : 'Removed from favorites',
-                    widget.favoriteMovies.contains(movieId) ? Icons.favorite : Icons.favorite_border,
-                  );
-                },
+                year: movie['Year']?.toString(),
+                rating: movie['imdbRating']?.toString(),
+                isFavorite: favoriteMovies.contains(movieId),
+                onFavorite: () => toggleFavorite(movieId, movie),
                 onTap: () => _navigateToDetails(movie),
               ),
             );

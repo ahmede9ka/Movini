@@ -1,17 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../services/movie_services.dart';
+import '../../services/auth_service.dart';
 import '../../widgets/movie_card.dart';
+import '../auth/authService.dart';
 import '../details/movie_details_screen.dart';
 
 class FavoritesScreen extends StatefulWidget {
-  final Set<String> favoriteMovies;
-  final Function(String) onFavoriteToggle;
-
-  const FavoritesScreen({
-    super.key,
-    required this.favoriteMovies,
-    required this.onFavoriteToggle,
-  });
+  const FavoritesScreen({super.key});
 
   @override
   State<FavoritesScreen> createState() => _FavoritesScreenState();
@@ -19,9 +18,15 @@ class FavoritesScreen extends StatefulWidget {
 
 class _FavoritesScreenState extends State<FavoritesScreen> with SingleTickerProviderStateMixin {
   final MovieService movieService = MovieService();
+  final AuthService authService = AuthService();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
   Map<String, Map<String, dynamic>> favoriteMoviesDetails = {};
   bool isLoading = true;
   late AnimationController _animationController;
+
+  StreamSubscription? _favoritesSubscription;
 
   @override
   void initState() {
@@ -30,57 +35,162 @@ class _FavoritesScreenState extends State<FavoritesScreen> with SingleTickerProv
       duration: const Duration(milliseconds: 300),
       vsync: this,
     );
-    _loadFavoriteMovies();
+    _setupRealtimeListener();
   }
 
   @override
   void dispose() {
+    _favoritesSubscription?.cancel();
     _animationController.dispose();
     super.dispose();
   }
 
-  @override
-  void didUpdateWidget(FavoritesScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.favoriteMovies.length != oldWidget.favoriteMovies.length) {
-      _loadFavoriteMovies();
+  void _setupRealtimeListener() {
+    final userId = _auth.currentUser?.uid;
+    if (userId == null) {
+      setState(() {
+        isLoading = false;
+        favoriteMoviesDetails = {};
+      });
+      return;
     }
+
+    // Listen for real-time changes in favorites
+    _favoritesSubscription = _firestore
+        .collection('favorites')
+        .doc(userId)
+        .collection('movies')
+        .snapshots()
+        .listen((snapshot) {
+      _processFavoritesSnapshot(snapshot);
+    }, onError: (error) {
+      print('Error listening to favorites: $error');
+      setState(() => isLoading = false);
+    });
   }
 
-  Future<void> _loadFavoriteMovies() async {
-    setState(() => isLoading = true);
+  Future<void> _processFavoritesSnapshot(QuerySnapshot snapshot) async {
+    if (snapshot.docs.isEmpty) {
+      setState(() {
+        favoriteMoviesDetails = {};
+        isLoading = false;
+      });
+      return;
+    }
 
     Map<String, Map<String, dynamic>> details = {};
 
-    for (String movieId in widget.favoriteMovies) {
+    for (var doc in snapshot.docs) {
       try {
-        final movieDetails = await movieService.getMovieDetails(movieId);
-        details[movieId] = movieDetails;
+        final movieId = doc.id;
+        final data = doc.data() as Map<String, dynamic>;
+
+        if (movieId.isNotEmpty) {
+          try {
+            // Try to get details from API
+            final movieDetails = await movieService.getMovieDetails(movieId);
+            if (movieDetails.isNotEmpty && movieDetails.containsKey('Title')) {
+              details[movieId] = movieDetails;
+            } else {
+              // If API fails, use stored data
+              details[movieId] = {
+                'Title': data['movieTitle'] ?? 'Unknown',
+                'Year': data['year'] ?? '',
+                'Poster': data['posterUrl'] ?? 'https://via.placeholder.com/300x450.png?text=No+Image',
+                'imdbRating': data['rating'] ?? '0.0',
+                'Genre': data['genre'] ?? 'Unknown',
+              };
+            }
+          } catch (apiError) {
+            // If API fails, use stored data
+            details[movieId] = {
+              'Title': data['movieTitle'] ?? 'Unknown',
+              'Year': data['year'] ?? '',
+              'Poster': data['posterUrl'] ?? 'https://via.placeholder.com/300x450.png?text=No+Image',
+              'imdbRating': data['rating'] ?? '0.0',
+              'Genre': data['genre'] ?? 'Unknown',
+            };
+          }
+        }
       } catch (e) {
-        // Skip movies that fail to load
+        print('Error processing favorite: $e');
       }
     }
 
-    setState(() {
-      favoriteMoviesDetails = details;
-      isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        favoriteMoviesDetails = details;
+        isLoading = false;
+      });
 
-    _animationController.forward(from: 0);
+      // Animate after loading
+      _animationController.forward(from: 0);
+    }
   }
 
-  void _navigateToDetails(Map movie, String movieId) {
+  Future<void> _removeFromFavorites(String movieId) async {
+    try {
+      final result = await authService.removeFromFavorites(movieId);
+      if (result['success'] == true) {
+        // No need to manually update state - the stream will handle it
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.favorite_border, color: Colors.white),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(result['message'] ?? 'Removed from favorites')),
+                ],
+              ),
+              backgroundColor: Colors.black87,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              duration: const Duration(seconds: 2),
+              margin: const EdgeInsets.all(16),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result['message'] ?? 'Failed to remove from favorites'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error removing favorite: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _navigateToDetails(Map<String, dynamic> movie, String movieId) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => MovieDetailsScreen(
           movieId: movieId,
-          title: movie['Title'] ?? 'Unknown',
-          posterUrl: movie['Poster'] != 'N/A' && movie['Poster'] != null
-              ? movie['Poster']
+          title: movie['Title']?.toString() ?? 'Unknown',
+          posterUrl: (movie['Poster'] != null &&
+              movie['Poster'] != 'N/A' &&
+              movie['Poster'].toString().isNotEmpty)
+              ? movie['Poster'].toString()
               : 'https://via.placeholder.com/300x450.png?text=No+Image',
+          year: movie['Year']?.toString() ?? '',
+          rating: movie['imdbRating']?.toString() ?? '0.0',
           isFavorite: true,
-          onToggleFavorite: widget.onFavoriteToggle,
+          onToggleFavorite: (movieId) async {
+            await _removeFromFavorites(movieId);
+          },
         ),
       ),
     );
@@ -96,7 +206,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> with SingleTickerProv
 
           if (isLoading)
             SliverFillRemaining(child: _buildLoadingState())
-          else if (widget.favoriteMovies.isEmpty)
+          else if (favoriteMoviesDetails.isEmpty)
             SliverFillRemaining(child: _buildEmptyState())
           else ...[
               SliverToBoxAdapter(
@@ -211,26 +321,26 @@ class _FavoritesScreenState extends State<FavoritesScreen> with SingleTickerProv
 
   Widget _buildStatsSection() {
     final genres = <String, int>{};
-    int totalRating = 0;
+    double totalRating = 0;
     int ratedMovies = 0;
 
     for (var movie in favoriteMoviesDetails.values) {
-      // Count genres
       final genreStr = movie['Genre'] as String?;
-      if (genreStr != null && genreStr != 'N/A') {
+      if (genreStr != null && genreStr != 'N/A' && genreStr != 'Unknown') {
         for (var genre in genreStr.split(',')) {
           final trimmed = genre.trim();
           genres[trimmed] = (genres[trimmed] ?? 0) + 1;
         }
       }
 
-      // Average rating
       final rating = movie['imdbRating'] as String?;
       if (rating != null && rating != 'N/A') {
         try {
-          totalRating += (double.parse(rating) * 10).toInt();
+          totalRating += double.parse(rating);
           ratedMovies++;
-        } catch (e) {}
+        } catch (e) {
+          print('Error parsing rating: $e');
+        }
       }
     }
 
@@ -239,7 +349,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> with SingleTickerProv
         : genres.entries.reduce((a, b) => a.value > b.value ? a : b).key;
 
     final avgRating = ratedMovies > 0
-        ? (totalRating / ratedMovies / 10).toStringAsFixed(1)
+        ? (totalRating / ratedMovies).toStringAsFixed(1)
         : 'N/A';
 
     return Container(
@@ -373,7 +483,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> with SingleTickerProv
             ),
             const SizedBox(height: 12),
             Text(
-              'Movies you love will appear here',
+              'Movies you love will appear here automatically',
               style: TextStyle(
                 fontSize: 16,
                 color: Colors.grey[500],
@@ -470,36 +580,16 @@ class _FavoritesScreenState extends State<FavoritesScreen> with SingleTickerProv
                 ),
               ),
               child: MovieCard(
-                title: movie['Title'] ?? 'Unknown',
-                posterUrl: movie['Poster'] != 'N/A' && movie['Poster'] != null
-                    ? movie['Poster']
+                title: movie['Title']?.toString() ?? 'Unknown',
+                posterUrl: (movie['Poster'] != null &&
+                    movie['Poster'] != 'N/A' &&
+                    movie['Poster'].toString().isNotEmpty)
+                    ? movie['Poster'].toString()
                     : 'https://via.placeholder.com/300x450.png?text=No+Image',
-                year: movie['Year'],
-                rating: movie['imdbRating'],
+                year: movie['Year']?.toString(),
+                rating: movie['imdbRating']?.toString(),
                 isFavorite: true,
-                onFavorite: () {
-                  widget.onFavoriteToggle(movieId);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Row(
-                        children: [
-                          const Icon(Icons.favorite_border, color: Colors.white),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text('Removed from favorites'),
-                          ),
-                        ],
-                      ),
-                      backgroundColor: Colors.black87,
-                      behavior: SnackBarBehavior.floating,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      duration: const Duration(seconds: 2),
-                      margin: const EdgeInsets.all(16),
-                    ),
-                  );
-                },
+                onFavorite: () => _removeFromFavorites(movieId),
                 onTap: () => _navigateToDetails(movie, movieId),
               ),
             );

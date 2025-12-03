@@ -19,37 +19,26 @@ class AuthService {
   // Sign In with Google
   Future<Map<String, dynamic>> signInWithGoogle() async {
     try {
-      // Trigger the authentication flow
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
-
       if (googleUser == null) {
-        // User cancelled the sign-in
         return {
           'success': false,
           'message': 'Sign in cancelled',
         };
       }
 
-      // Obtain the auth details from the request
       final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-
-      // Create a new credential
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
       );
 
-      // Sign in to Firebase with the Google credential
-      final UserCredential userCredential =
-      await _auth.signInWithCredential(credential);
-
+      final UserCredential userCredential = await _auth.signInWithCredential(credential);
       final userId = userCredential.user!.uid;
 
-      // Check if user document exists
       final userDoc = await _firestore.collection('users').doc(userId).get();
 
       if (!userDoc.exists) {
-        // First time sign in - create user document
         final names = (userCredential.user!.displayName ?? '').split(' ');
         final firstName = names.isNotEmpty ? names.first : '';
         final lastName = names.length > 1 ? names.sublist(1).join(' ') : '';
@@ -57,7 +46,7 @@ class AuthService {
         await _firestore.collection('users').doc(userId).set({
           'prenom': firstName,
           'nom': lastName,
-          'age': 0, // User should update this
+          'age': 0,
           'email': userCredential.user!.email ?? '',
           'photoURL': userCredential.user!.photoURL ?? '',
           'role': 'user',
@@ -74,13 +63,12 @@ class AuthService {
           'role': 'user',
         };
       } else {
-        // Existing user - check if active
         final userData = userDoc.data()!;
         if (userData['isActive'] == false) {
           await signOut();
           return {
             'success': false,
-            'message': 'Your account has been deactivated. Please contact support.',
+            'message': 'Your account has been deactivated.',
           };
         }
 
@@ -115,22 +103,18 @@ class AuthService {
     required File? image,
   }) async {
     try {
-      // 1. Create user with Firebase Auth
-      UserCredential userCredential =
-      await _auth.createUserWithEmailAndPassword(
+      UserCredential userCredential = await _auth.createUserWithEmailAndPassword(
         email: email.trim(),
         password: password.trim(),
       );
 
       final userId = userCredential.user!.uid;
-
-      // 2. Upload photo to Firebase Storage
       String? photoURL;
+
       if (image != null) {
         photoURL = await _uploadImage(userId, image);
       }
 
-      // 3. Create user document in Firestore
       await _firestore.collection('users').doc(userId).set({
         'nom': lastName.trim(),
         'prenom': firstName.trim(),
@@ -143,9 +127,7 @@ class AuthService {
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // 4. Update display name and photo in Firebase Auth
-      await userCredential.user!
-          .updateDisplayName('$firstName $lastName');
+      await userCredential.user!.updateDisplayName('$firstName $lastName');
       if (photoURL != null) {
         await userCredential.user!.updatePhotoURL(photoURL);
       }
@@ -174,13 +156,11 @@ class AuthService {
     required String password,
   }) async {
     try {
-      // 1. Sign in with Firebase Auth
       UserCredential userCredential = await _auth.signInWithEmailAndPassword(
         email: email.trim(),
         password: password.trim(),
       );
 
-      // 2. Check if user is active
       final userDoc = await _firestore
           .collection('users')
           .doc(userCredential.user!.uid)
@@ -199,7 +179,7 @@ class AuthService {
         await signOut();
         return {
           'success': false,
-          'message': 'Your account has been deactivated. Please contact support.',
+          'message': 'Your account has been deactivated.',
         };
       }
 
@@ -224,7 +204,7 @@ class AuthService {
 
   // Sign Out
   Future<void> signOut() async {
-    await _googleSignIn.signOut();
+    //await _googleSignIn.signOut();
     await _auth.signOut();
   }
 
@@ -246,6 +226,142 @@ class AuthService {
         'success': false,
         'message': 'An unexpected error occurred: $e',
       };
+    }
+  }
+
+  // Add to favorites
+  Future<Map<String, dynamic>> addToFavorites({
+    required String movieId,
+    required String movieTitle,
+    required String year,
+    required String posterUrl,
+    required String rating,
+  }) async {
+    try {
+      if (currentUser == null) {
+        return {
+          'success': false,
+          'message': 'User not logged in',
+        };
+      }
+
+      final timestamp = DateTime.now();
+
+      await _firestore
+          .collection('favorites')
+          .doc(currentUser!.uid)
+          .collection('movies')
+          .doc(movieId)
+          .set({
+        'movieId': movieId,
+        'movieTitle': movieTitle,
+        'year': year,
+        'posterUrl': posterUrl,
+        'rating': rating,
+        'addedAt': timestamp,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+
+      return {
+        'success': true,
+        'message': 'Added to favorites',
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Error adding to favorites: $e',
+      };
+    }
+  }
+
+  // Remove from favorites
+  Future<Map<String, dynamic>> removeFromFavorites(String movieId) async {
+    try {
+      if (currentUser == null) {
+        return {
+          'success': false,
+          'message': 'User not logged in',
+        };
+      }
+
+      await _firestore
+          .collection('favorites')
+          .doc(currentUser!.uid)
+          .collection('movies')
+          .doc(movieId)
+          .delete();
+
+      return {
+        'success': true,
+        'message': 'Removed from favorites',
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Error removing from favorites: $e',
+      };
+    }
+  }
+
+  // Check if movie is favorite
+  Future<bool> isFavorite(String movieId) async {
+    try {
+      if (currentUser == null) return false;
+
+      final doc = await _firestore
+          .collection('favorites')
+          .doc(currentUser!.uid)
+          .collection('movies')
+          .doc(movieId)
+          .get();
+
+      return doc.exists;
+    } catch (e) {
+      print('Error checking favorite: $e');
+      return false;
+    }
+  }
+
+  // Get favorites count
+  Future<int> getFavoritesCount() async {
+    try {
+      if (currentUser == null) return 0;
+
+      final snapshot = await _firestore
+          .collection('favorites')
+          .doc(currentUser!.uid)
+          .collection('movies')
+          .get();
+
+      return snapshot.docs.length;
+    } catch (e) {
+      print('Error getting favorites count: $e');
+      return 0;
+    }
+  }
+
+  // Get user's favorites
+  Future<List<Map<String, dynamic>>> getUserFavorites() async {
+    try {
+      if (currentUser == null) return [];
+
+      final snapshot = await _firestore
+          .collection('favorites')
+          .doc(currentUser!.uid)
+          .collection('movies')
+          .orderBy('addedAt', descending: true)
+          .get();
+
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        return {
+          'id': doc.id,
+          ...data,
+        };
+      }).toList();
+    } catch (e) {
+      print('Error getting user favorites: $e');
+      return [];
     }
   }
 

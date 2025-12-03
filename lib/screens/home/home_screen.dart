@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'movies_screen.dart';
-import 'favorites_screen.dart';
+import '../favorites/favorites_screen.dart';
 import 'matching_screen.dart';
 import '../profile/profile_screen.dart';
 
@@ -14,32 +14,12 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int index = 0;
 
-  // Shared favorites across all screens
-  final Set<String> favoriteMovies = {};
-  final Set<String> favoriteMovies2 = {};
-
-  void _toggleFavorite(String movieId) {
-    setState(() {
-      if (favoriteMovies.contains(movieId)) {
-        favoriteMovies.remove(movieId);
-      } else {
-        favoriteMovies.add(movieId);
-      }
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final screens = [
-      MoviesScreen(
-        favoriteMovies: favoriteMovies,
-        onFavoriteToggle: _toggleFavorite,
-      ),
-      FavoritesScreen(
-        favoriteMovies: favoriteMovies2,
-        onFavoriteToggle: _toggleFavorite,
-      ),
-      MatchingScreen(),
+      const MoviesScreen(),
+      const FavoritesScreen(),
+      const MatchingScreen(),
       const ProfileScreen(),
     ];
 

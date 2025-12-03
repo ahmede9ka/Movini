@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:movini/screens/home/movies_screen.dart';
-import 'package:movini/screens/favorites/favorites_screen.dart';
-import 'package:movini/screens//profile/profile_screen.dart';
+import '../home/movies_screen.dart';
+import '../favorites/favorites_screen.dart';
+import '../profile/profile_screen.dart';
 
 class MainNavigation extends StatefulWidget {
   const MainNavigation({super.key});
@@ -13,35 +13,16 @@ class MainNavigation extends StatefulWidget {
 class _MainNavigationState extends State<MainNavigation> {
   int _currentIndex = 0;
 
-  // Shared favorites across all screens
-  final Set<String> _favoriteMovies = {};
-
   late final List<Widget> _screens;
 
   @override
   void initState() {
     super.initState();
     _screens = [
-      MoviesScreen(
-        favoriteMovies: _favoriteMovies,
-        onFavoriteToggle: _toggleFavorite,
-      ),
-      FavoritesScreen(
-        favoriteMovies: _favoriteMovies,
-        onFavoriteToggle: _toggleFavorite,
-      ),
+      const MoviesScreen(),
+      const FavoritesScreen(),
       const ProfileScreen(),
     ];
-  }
-
-  void _toggleFavorite(String movieId) {
-    setState(() {
-      if (_favoriteMovies.contains(movieId)) {
-        _favoriteMovies.remove(movieId);
-      } else {
-        _favoriteMovies.add(movieId);
-      }
-    });
   }
 
   @override

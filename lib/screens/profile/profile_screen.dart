@@ -1,29 +1,184 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../auth/authService.dart';
+import '../auth/login_screen.dart'; // Import your login screen
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.grey[50],
-      body: CustomScrollView(
-        slivers: [
-          _buildSliverAppBar(context),
-          SliverToBoxAdapter(
-            child: Column(
-              children: [
-                const SizedBox(height: 24),
-                _buildProfileHeader(),
-                const SizedBox(height: 32),
-                _buildStatsCards(),
-                const SizedBox(height: 24),
-                _buildSettingsList(context),
-                const SizedBox(height: 40),
-              ],
-            ),
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final AuthService authService = AuthService();
+  Map<String, dynamic>? _userData;
+  int _favoritesCount = 0;
+  bool _isLoading = true;
+  bool _isDarkMode = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserData();
+  }
+
+  Future<void> _loadUserData() async {
+    final currentUser = authService.currentUser;
+
+    if (currentUser != null) {
+      try {
+        // Load user data from Firestore
+        final data = await authService.getUserData(currentUser.uid);
+
+        // Load favorites count
+        _favoritesCount = await authService.getFavoritesCount();
+
+        setState(() {
+          _userData = data;
+          _isLoading = false;
+        });
+      } catch (e) {
+        print('Error loading user data: $e');
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } else {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _refreshData() async {
+    setState(() {
+      _isLoading = true;
+    });
+    await _loadUserData();
+  }
+
+  Future<void> _showLogoutDialog(BuildContext context) async {
+    return showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Logout'),
+        content: const Text('Are you sure you want to logout?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context); // Close the dialog first
+              await _performLogout(context);
+            },
+            child: const Text('Logout', style: TextStyle(color: Colors.red)),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _performLogout(BuildContext context) async {
+    try {
+      // Show loading indicator
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+
+      // Perform logout
+      await authService.signOut();
+
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+
+      // Clear local data
+      setState(() {
+        _userData = null;
+        _favoritesCount = 0;
+      });
+
+      // Navigate to login screen
+      _navigateToLogin(context);
+
+    } catch (e) {
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error logging out: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  void _navigateToLogin(BuildContext context) {
+    // Navigate to your login screen using pushReplacement
+    // This replaces the current screen with login screen
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LoginScreen(), // Your imported LoginScreen
+      ),
+    );
+  }
+
+  void _showEditProfileDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Profile'),
+        content: const Text('Profile editing functionality will be added soon!'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUser = authService.currentUser;
+
+    return Scaffold(
+      backgroundColor: Colors.grey[50],
+      body: RefreshIndicator(
+        onRefresh: _refreshData,
+        child: CustomScrollView(
+          slivers: [
+            _buildSliverAppBar(context),
+            SliverToBoxAdapter(
+              child: _isLoading
+                  ? _buildLoadingIndicator()
+                  : currentUser == null
+                  ? _buildNotLoggedIn()
+                  : Column(
+                children: [
+                  const SizedBox(height: 24),
+                  _buildProfileHeader(currentUser, _userData),
+                  const SizedBox(height: 32),
+                  _buildStatsCards(),
+                  const SizedBox(height: 24),
+                  _buildSettingsList(context),
+                  const SizedBox(height: 40),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -57,7 +212,72 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildProfileHeader() {
+  Widget _buildLoadingIndicator() {
+    return Container(
+      height: 400,
+      child: const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+  }
+
+  Widget _buildNotLoggedIn() {
+    return Padding(
+      padding: const EdgeInsets.all(32.0),
+      child: Column(
+        children: [
+          Icon(
+            Icons.person_off,
+            size: 80,
+            color: Colors.grey[400],
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Not Logged In',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Please log in to view your profile',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.grey,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: () {
+              _navigateToLogin(context);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+            ),
+            child: const Text(
+              'Login',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileHeader(User currentUser, Map<String, dynamic>? userData) {
+    String displayName = currentUser.displayName ??
+        '${userData?['prenom'] ?? ''} ${userData?['nom'] ?? ''}'.trim();
+    if (displayName.isEmpty) displayName = 'Movie Lover';
+
+    String email = currentUser.email ?? userData?['email'] ?? 'No email';
+    String? photoUrl = currentUser.photoURL ?? userData?['photoURL'];
+
+    String? role = userData?['role'];
+
     return Column(
       children: [
         Container(
@@ -77,14 +297,19 @@ class ProfileScreen extends StatelessWidget {
             child: CircleAvatar(
               radius: 50,
               backgroundColor: Colors.grey[200],
-              child: Icon(Icons.person, size: 50, color: Colors.grey[600]),
+              backgroundImage: photoUrl != null && photoUrl.isNotEmpty
+                  ? NetworkImage(photoUrl)
+                  : null,
+              child: photoUrl == null || photoUrl.isEmpty
+                  ? Icon(Icons.person, size: 50, color: Colors.grey[600])
+                  : null,
             ),
           ),
         ),
         const SizedBox(height: 16),
-        const Text(
-          'Movie Lover',
-          style: TextStyle(
+        Text(
+          displayName,
+          style: const TextStyle(
             fontSize: 24,
             fontWeight: FontWeight.bold,
             color: Colors.black87,
@@ -92,12 +317,30 @@ class ProfileScreen extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          'moviefan@example.com',
+          email,
           style: TextStyle(
             fontSize: 14,
             color: Colors.grey[600],
           ),
         ),
+        if (role == 'admin') ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.orange[100],
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              'ADMIN',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.orange[800],
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -107,11 +350,32 @@ class ProfileScreen extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
-          Expanded(child: _buildStatCard('Movies\nWatched', '127', Icons.movie, Colors.blue)),
+          Expanded(
+            child: _buildStatCard(
+              'Movies\nWatched',
+              '127', // Placeholder
+              Icons.movie,
+              Colors.blue,
+            ),
+          ),
           const SizedBox(width: 12),
-          Expanded(child: _buildStatCard('Favorites', '23', Icons.favorite, Colors.red)),
+          Expanded(
+            child: _buildStatCard(
+              'Favorites',
+              '$_favoritesCount',
+              Icons.favorite,
+              Colors.red,
+            ),
+          ),
           const SizedBox(width: 12),
-          Expanded(child: _buildStatCard('Reviews', '45', Icons.star, Colors.amber)),
+          Expanded(
+            child: _buildStatCard(
+              'Reviews',
+              '45', // Placeholder
+              Icons.star,
+              Colors.amber,
+            ),
+          ),
         ],
       ),
     );
@@ -200,7 +464,7 @@ class ProfileScreen extends StatelessWidget {
                   icon: Icons.person_outline,
                   title: 'Edit Profile',
                   subtitle: 'Update your personal information',
-                  onTap: () {},
+                  onTap: () => _showEditProfileDialog(context),
                 ),
                 _buildDivider(),
                 _buildSettingTile(
@@ -222,8 +486,12 @@ class ProfileScreen extends StatelessWidget {
                   title: 'Dark Mode',
                   subtitle: 'Toggle dark theme',
                   trailing: Switch(
-                    value: false,
-                    onChanged: (value) {},
+                    value: _isDarkMode,
+                    onChanged: (value) {
+                      setState(() {
+                        _isDarkMode = value;
+                      });
+                    },
                     activeColor: Theme.of(context).primaryColor,
                   ),
                 ),
@@ -262,25 +530,7 @@ class ProfileScreen extends StatelessWidget {
               title: 'Logout',
               subtitle: 'Sign out of your account',
               iconColor: Colors.red,
-              onTap: () {
-                showDialog(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Logout'),
-                    content: const Text('Are you sure you want to logout?'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Logout', style: TextStyle(color: Colors.red)),
-                      ),
-                    ],
-                  ),
-                );
-              },
+              onTap: () => _showLogoutDialog(context),
             ),
           ),
         ],

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
 import '../home/home_screen.dart';
-import '../admin/admin_home.dart';
+import '../admin/admin_home.dart';  // Your existing admin screen
+    // Import your new admin screen
 import 'authService.dart';
 import 'signup_screen.dart';
 
@@ -21,6 +22,10 @@ class _LoginScreenState extends State<LoginScreen> {
   bool isLoading = false;
   bool obscurePassword = true;
 
+  // Static admin credentials
+  static const String staticAdminEmail = "admin@gmail.com";
+  static const String staticAdminPassword = "aaaaaa";
+
   @override
   void dispose() {
     emailController.dispose();
@@ -38,9 +43,28 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
+      // First check if it's the static admin
+      final enteredEmail = emailController.text.trim();
+      final enteredPassword = passwordController.text.trim();
+
+      if (enteredEmail == staticAdminEmail && enteredPassword == staticAdminPassword) {
+        // Static admin login successful
+        if (!mounted) return;
+
+        _showSnackBar('Welcome, Admin!');
+
+        // Navigate to your admin screen - you can use AdminHome or AdminScreen
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => AdminHome()), // or AdminHome()
+        );
+        return;
+      }
+
+      // If not static admin, proceed with regular authentication
       final result = await _authService.signIn(
-        email: emailController.text.trim(),
-        password: passwordController.text.trim(),
+        email: enteredEmail,
+        password: enteredPassword,
       );
 
       if (!mounted) return;
@@ -120,7 +144,15 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _forgotPassword() async {
-    if (emailController.text.trim().isEmpty) {
+    final email = emailController.text.trim();
+
+    // Don't allow password reset for static admin email
+    if (email == staticAdminEmail) {
+      _showSnackBar('Password reset not available for admin account', isError: true);
+      return;
+    }
+
+    if (email.isEmpty) {
       _showSnackBar('Please enter your email address', isError: true);
       return;
     }
@@ -129,7 +161,7 @@ class _LoginScreenState extends State<LoginScreen> {
       isLoading = true;
     });
 
-    final result = await _authService.resetPassword(emailController.text.trim());
+    final result = await _authService.resetPassword(email);
 
     if (mounted) {
       setState(() {
@@ -195,7 +227,20 @@ class _LoginScreenState extends State<LoginScreen> {
                       color: Colors.grey[600],
                     ),
                   ),
-                  const SizedBox(height: 40),
+
+                  // Optional: Admin hint (you can remove this in production)
+                  const SizedBox(height: 8),
+                  Text(
+                    'Admin: $staticAdminEmail / $staticAdminPassword',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[400],
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+
+                  const SizedBox(height: 32),
 
                   // Email Field
                   TextFormField(

@@ -14,7 +14,7 @@ class MovieDetailsScreen extends StatefulWidget {
     required this.title,
     required this.posterUrl,
     required this.isFavorite,
-    required this.onToggleFavorite,
+    required this.onToggleFavorite, required String rating, required String year,
   });
 
   @override

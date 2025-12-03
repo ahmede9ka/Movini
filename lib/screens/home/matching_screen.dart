@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
-import 'dart:math' as math;
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../../services/auth_service.dart';
+import '../auth/authService.dart';
 
 class MatchingScreen extends StatefulWidget {
   const MatchingScreen({super.key});
@@ -10,6 +13,14 @@ class MatchingScreen extends StatefulWidget {
 
 class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStateMixin {
   late AnimationController _animationController;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final AuthService _authService = AuthService();
+
+  List<Map<String, dynamic>> matchedUsers = [];
+  bool isLoading = true;
+  Map<String, dynamic> currentUserData = {};
+  List<String> currentUserFavorites = [];
 
   @override
   void initState() {
@@ -18,7 +29,7 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
       duration: const Duration(milliseconds: 800),
       vsync: this,
     );
-    _animationController.forward();
+    _loadUserDataAndMatches();
   }
 
   @override
@@ -27,49 +38,160 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
     super.dispose();
   }
 
-  // Temporary list until Firebase logic added
-  final matchedUsers = [
-    {
-      "name": "Ahmed",
-      "match": 92,
-      "photo": "https://picsum.photos/200/200?random=1",
-      "commonMovies": 12,
-      "favoriteGenre": "Action",
-      "lastActive": "2 hours ago"
-    },
-    {
-      "name": "Ines",
-      "match": 88,
-      "photo": "https://picsum.photos/200/200?random=2",
-      "commonMovies": 8,
-      "favoriteGenre": "Drama",
-      "lastActive": "Online"
-    },
-    {
-      "name": "Omar",
-      "match": 85,
-      "photo": "https://picsum.photos/200/200?random=3",
-      "commonMovies": 15,
-      "favoriteGenre": "Sci-Fi",
-      "lastActive": "1 day ago"
-    },
-    {
-      "name": "Salma",
-      "match": 79,
-      "photo": "https://picsum.photos/200/200?random=4",
-      "commonMovies": 6,
-      "favoriteGenre": "Comedy",
-      "lastActive": "5 hours ago"
-    },
-    {
-      "name": "Youssef",
-      "match": 76,
-      "photo": "https://picsum.photos/200/200?random=5",
-      "commonMovies": 10,
-      "favoriteGenre": "Thriller",
-      "lastActive": "Online"
-    },
-  ];
+  Future<void> _loadUserDataAndMatches() async {
+    setState(() => isLoading = true);
+
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) {
+        setState(() {
+          isLoading = false;
+          matchedUsers = [];
+        });
+        return;
+      }
+
+      // Load current user data
+      final userDoc = await _firestore.collection('users').doc(currentUserId).get();
+      if (userDoc.exists) {
+        currentUserData = userDoc.data()!;
+      }
+
+      // Load current user's favorites
+      final favoritesSnapshot = await _firestore
+          .collection('favorites')
+          .doc(currentUserId)
+          .collection('movies')
+          .get();
+
+      currentUserFavorites = favoritesSnapshot.docs.map((doc) => doc.id).toList();
+
+      // Load all other users
+      final allUsersSnapshot = await _firestore.collection('users').get();
+      final List<Map<String, dynamic>> allUsers = allUsersSnapshot.docs
+          .where((doc) => doc.id != currentUserId)
+          .map((doc) => {
+        'id': doc.id,
+        ...doc.data()!,
+        'favorites': [], // Will be populated
+        'matchPercentage': 0,
+        'commonMovies': 0,
+      })
+          .toList();
+
+      // For each user, load their favorites and calculate match
+      for (var user in allUsers) {
+        try {
+          final userFavoritesSnapshot = await _firestore
+              .collection('favorites')
+              .doc(user['id'])
+              .collection('movies')
+              .get();
+
+          final userFavorites = userFavoritesSnapshot.docs.map((doc) => doc.id).toList();
+          user['favorites'] = userFavorites;
+
+          // Calculate common movies
+          final commonMovies = _calculateCommonMovies(currentUserFavorites, userFavorites);
+          user['commonMovies'] = commonMovies;
+
+          // Calculate match percentage
+          user['matchPercentage'] = _calculateMatchPercentage(
+              currentUserFavorites,
+              userFavorites,
+              commonMovies
+          );
+
+          // Get favorite genre
+          user['favoriteGenre'] = await _getFavoriteGenre(user['id']);
+
+          // Get last active (simplified - using timestamp)
+          user['lastActive'] = _getLastActiveText(user['lastActive'] ?? '');
+
+        } catch (e) {
+          print('Error loading user ${user['id']} favorites: $e');
+        }
+      }
+
+      // Filter and sort users by match percentage
+      matchedUsers = allUsers
+          .where((user) => user['matchPercentage'] > 0)
+          .toList()
+        ..sort((a, b) => b['matchPercentage'].compareTo(a['matchPercentage']));
+
+      setState(() => isLoading = false);
+      _animationController.forward();
+
+    } catch (e) {
+      print('Error loading matches: $e');
+      setState(() {
+        isLoading = false;
+        matchedUsers = [];
+      });
+    }
+  }
+
+  int _calculateCommonMovies(List<String> user1Favorites, List<String> user2Favorites) {
+    if (user1Favorites.isEmpty || user2Favorites.isEmpty) return 0;
+
+    final set1 = user1Favorites.toSet();
+    final set2 = user2Favorites.toSet();
+    return set1.intersection(set2).length;
+  }
+
+  int _calculateMatchPercentage(
+      List<String> user1Favorites,
+      List<String> user2Favorites,
+      int commonMovies
+      ) {
+    if (user1Favorites.isEmpty || user2Favorites.isEmpty) return 0;
+
+    final totalUniqueMovies = {...user1Favorites, ...user2Favorites}.length;
+    if (totalUniqueMovies == 0) return 0;
+
+    // Calculate percentage based on common movies
+    final percentage = (commonMovies / totalUniqueMovies * 100).toInt();
+    return percentage.clamp(0, 100);
+  }
+
+  Future<String> _getFavoriteGenre(String userId) async {
+    try {
+      final favoritesSnapshot = await _firestore
+          .collection('favorites')
+          .doc(userId)
+          .collection('movies')
+          .get();
+
+      // Count genres
+      final genreCount = <String, int>{};
+
+      for (var doc in favoritesSnapshot.docs) {
+        final movieData = doc.data();
+        final genre = movieData['genre'] as String?;
+        if (genre != null && genre.isNotEmpty && genre != 'N/A' && genre != 'Unknown') {
+          final genres = genre.split(',');
+          for (var g in genres) {
+            final trimmed = g.trim();
+            genreCount[trimmed] = (genreCount[trimmed] ?? 0) + 1;
+          }
+        }
+      }
+
+      if (genreCount.isEmpty) return 'Various';
+
+      final topGenre = genreCount.entries.reduce((a, b) => a.value > b.value ? a : b).key;
+      return topGenre;
+    } catch (e) {
+      return 'Various';
+    }
+  }
+
+  String _getLastActiveText(String timestamp) {
+    // This is a simplified version. You should store last active timestamp in Firestore
+    // For now, we'll use random values
+    final options = ['Online', '2 hours ago', '1 day ago', '5 hours ago', 'Just now'];
+    return options[DateTime.now().millisecondsSinceEpoch % options.length];
+  }
 
   Color _getMatchColor(int match) {
     if (match >= 90) return Colors.green[600]!;
@@ -132,7 +254,7 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
               ),
             ),
           ),
-          _buildMatchesList(),
+          isLoading ? _buildLoadingState() : _buildMatchesList(),
         ],
       ),
     );
@@ -201,6 +323,11 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
   }
 
   Widget _buildStatsSection() {
+    final highMatches = matchedUsers.where((u) => u['matchPercentage'] >= 80).length;
+    final avgMatch = matchedUsers.isNotEmpty
+        ? matchedUsers.map((u) => u['matchPercentage'] as int).reduce((a, b) => a + b) ~/ matchedUsers.length
+        : 0;
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -222,14 +349,14 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
           Container(width: 1, height: 50, color: Colors.purple[200]),
           _buildStatItem(
             icon: Icons.star_rounded,
-            value: '${matchedUsers.where((u) => (u['match'] as int) >= 80).length}',
+            value: '$highMatches',
             label: 'High Matches',
             color: Colors.amber[700]!,
           ),
           Container(width: 1, height: 50, color: Colors.purple[200]),
           _buildStatItem(
             icon: Icons.trending_up,
-            value: '${matchedUsers.isNotEmpty ? matchedUsers.map((u) => u['match'] as int).reduce((a, b) => a + b) ~/ matchedUsers.length : 0}%',
+            value: '$avgMatch%',
             label: 'Avg Match',
             color: Colors.green[600]!,
           ),
@@ -270,7 +397,94 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
     );
   }
 
+  Widget _buildLoadingState() {
+    return SliverFillRemaining(
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              strokeWidth: 3,
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.purple[700]!),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Finding your movie matches...',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey[600],
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildMatchesList() {
+    if (matchedUsers.isEmpty) {
+      return SliverFillRemaining(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(40),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Colors.purple[50]!, Colors.deepPurple[50]!],
+                    ),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.people_outline,
+                    size: 80,
+                    color: Colors.purple[300],
+                  ),
+                ),
+                const SizedBox(height: 32),
+                Text(
+                  'No matches yet',
+                  style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey[800],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Add more movies to your favorites to find people with similar taste',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.grey[500],
+                    height: 1.5,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 32),
+                ElevatedButton.icon(
+                  onPressed: _loadUserDataAndMatches,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Refresh Matches'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purple[600],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       sliver: SliverList(
@@ -314,7 +528,7 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
   }
 
   Widget _buildMatchCard(Map<String, dynamic> user, int index) {
-    final match = user['match'] as int;
+    final match = user['matchPercentage'] as int;
     final matchColor = _getMatchColor(match);
     final isOnline = user['lastActive'] == 'Online';
 
@@ -336,22 +550,12 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
         child: InkWell(
           borderRadius: BorderRadius.circular(20),
           onTap: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('View ${user['name']}\'s profile'),
-                behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                duration: const Duration(seconds: 1),
-              ),
-            );
+            _showUserProfile(user);
           },
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                // Avatar with online indicator
                 Stack(
                   children: [
                     Container(
@@ -363,7 +567,11 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
                         ),
                       ),
                       child: CircleAvatar(
-                        backgroundImage: NetworkImage(user['photo'] as String),
+                        backgroundImage: NetworkImage(
+                            user['photoURL']?.toString().isNotEmpty == true
+                                ? user['photoURL'].toString()
+                                : 'https://ui-avatars.com/api/?name=${user['prenom']}+${user['nom']}&background=6d28d9&color=fff'
+                        ),
                         radius: 35,
                       ),
                     ),
@@ -385,7 +593,6 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
                 ),
                 const SizedBox(width: 16),
 
-                // User info
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -394,7 +601,7 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
                         children: [
                           Expanded(
                             child: Text(
-                              user['name'] as String,
+                              '${user['prenom'] ?? ''} ${user['nom'] ?? 'User'}',
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
@@ -402,7 +609,6 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
                               ),
                             ),
                           ),
-                          // Match percentage badge
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 10,
@@ -435,7 +641,6 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
                       ),
                       const SizedBox(height: 8),
 
-                      // Common movies & genre
                       Row(
                         children: [
                           Icon(Icons.movie, size: 14, color: Colors.grey[600]),
@@ -465,7 +670,6 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
                       ),
                       const SizedBox(height: 6),
 
-                      // Last active
                       Row(
                         children: [
                           Icon(
@@ -488,20 +692,10 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
                   ),
                 ),
 
-                // Action button
                 const SizedBox(width: 8),
                 IconButton(
                   onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Start chat with ${user['name']}'),
-                        behavior: SnackBarBehavior.floating,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        duration: const Duration(seconds: 1),
-                      ),
-                    );
+                    _startChatWithUser(user);
                   },
                   icon: Icon(
                     Icons.chat_bubble,
@@ -518,6 +712,53 @@ class _MatchingScreenState extends State<MatchingScreen> with TickerProviderStat
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  void _showUserProfile(Map<String, dynamic> user) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${user['prenom']} ${user['nom']}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              backgroundImage: NetworkImage(
+                  user['photoURL']?.toString().isNotEmpty == true
+                      ? user['photoURL'].toString()
+                      : 'https://ui-avatars.com/api/?name=${user['prenom']}+${user['nom']}&background=6d28d9&color=fff'
+              ),
+              radius: 40,
+            ),
+            const SizedBox(height: 16),
+            Text('Match: ${user['matchPercentage']}%'),
+            Text('Common Movies: ${user['commonMovies']}'),
+            Text('Favorite Genre: ${user['favoriteGenre']}'),
+            Text('Email: ${user['email'] ?? 'Not available'}'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _startChatWithUser(Map<String, dynamic> user) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Starting chat with ${user['prenom']} ${user['nom']}'),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
